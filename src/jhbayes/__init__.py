@@ -8,4 +8,5 @@ __license__ = "MIT"
 __description__ = "hbayes with jax"
 
 #from . import hierarchical
-from .hierarchical import *
+from .twodhierarchical import *
+from .onedhierarchical import *
