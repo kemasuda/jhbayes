@@ -14,13 +14,13 @@ def define_bins(min, max, d):
     return bins, bins_center, Nbin
 
 class TwodHierarchical():
-    def __init__(self, samples, xmin, xmax, dx, ymin, ymax, dy, bin_log, sample_log, xvals=None, yvals=None, vallabel=None, xtrue=None, ytrue=None, truelabel=None):
+    def __init__(self, samples, xmin, xmax, dx, ymin, ymax, dy, bin_log, sample_log, xvals=None, yvals=None, vallabel=None, xtrue=None, ytrue=None, truelabel=None, valid_xybin_func=None):
         self.postsamples = samples
         if bin_log:
             self.postsamples[:,:,1] = np.log10(self.postsamples[:,:,1] * 1e9)
-            age_upper = lambda mass: np.log10((-30 * (mass-1.25) + 5.) * 1e9)
-        else:
-            age_upper = lambda mass: -30 * (mass-1.25) + 5.
+            #age_upper = lambda mass: np.log10((-30 * (mass-1.25) + 5.) * 1e9)
+        #else:
+            #age_upper = lambda mass: -30 * (mass-1.25) + 5.
 
         self.xmin, self.xmax, self.dx, self.ymin, self.ymax, self.dy, self.bin_log, self.sample_log, self.xvals, self.yvals, self.vallabel, self.xtrue, self.ytrue, self.truelabel = xmin, xmax, dx, ymin, ymax, dy, bin_log, sample_log, xvals, yvals, vallabel, xtrue, ytrue, truelabel
 
@@ -31,6 +31,11 @@ class TwodHierarchical():
         self.Nbin = self.Nxbin * self.Nybin
         self.Xbins_center = jnp.tile(self.xbins_center, self.Nybin)
         self.Ybins_center = jnp.repeat(self.ybins_center, self.Nxbin)
+        if valid_xybin_func is None:
+            self.idx_valid_xybin = self.Ybins_center**2 > -1
+        else:
+            self.idx_valid_xybin = valid_xybin_func(self.Xbins_center, self.Ybins_center)
+        #self.idx_valid_xybin = (self.Ybins_center < age_upper(self.Xbins_center))
 
         xidx = jnp.digitize(self.postsamples[:,:,0], self.xbins) - 1
         yidx = jnp.digitize(self.postsamples[:,:,1], self.ybins) - 1
@@ -46,22 +51,20 @@ class TwodHierarchical():
             ageprior_correction = jnp.exp(-self.postsamples[:,:,1]) # ??
             self.L = jnp.array([jnp.sum((_xyidx == k)*ageprior_correction, axis=1) for k in range(self.Nbin)]).T
 
-        self.idx_valid_mass_age = (self.Ybins_center < age_upper(self.Xbins_center))
-        self.idx_valid_grid = self.idx_valid_mass_age.reshape((self.Nybin,self.Nxbin))
+        self.idx_valid_grid = self.idx_valid_xybin.reshape((self.Nybin,self.Nxbin))
         self.idx_valid_numgrid = jnp.where(self.idx_valid_grid, 1, jnp.nan)
         self.idx_valid_xdiff = jnp.diff(self.idx_valid_numgrid, axis=1)==0
         self.idx_valid_ydiff = jnp.diff(self.idx_valid_numgrid, axis=0)==0
-        self.Nvalbin = jnp.sum(self.idx_valid_mass_age)
+        self.Nvalbin = jnp.sum(self.idx_valid_xybin)
         self.eye = jnp.eye(self.Nvalbin)
 
         self.alpha_max = jnp.log(1./self.ds)
-        #alpha_mean = jnp.log(1./(xmax-xmin)/(ymax-ymin))
-        self.alpha_mean = jnp.log(1./dx/dy/np.sum(self.idx_valid_mass_age))
+        self.alpha_mean = jnp.log(1./dx/dy/np.sum(self.idx_valid_xybin))
 
     def stepmodel(self, rflag=None, normprec=1e4, alpha_zero=-10, nodata=False, fix_lneps=None, **kwargs):
         # hyperprior
         alphas = numpyro.sample("alphas", dist.Uniform(low=alpha_zero*jnp.ones(self.Nbin), high=self.alpha_max*jnp.ones(self.Nbin)))
-        alphas = jnp.where(self.idx_valid_mass_age, alphas, alpha_zero)
+        alphas = jnp.where(self.idx_valid_xybin, alphas, alpha_zero)
         priors = jnp.exp(alphas)
         numpyro.deterministic("priors", priors)
 
@@ -84,7 +87,7 @@ class TwodHierarchical():
         # add rotation data
         if rflag is not None:
             fracs = numpyro.sample("fracs", dist.Uniform(low=jnp.zeros(self.Nbin), high=jnp.ones(self.Nbin)))
-            fracs = jnp.where(self.idx_valid_mass_age, fracs, 0)
+            fracs = jnp.where(self.idx_valid_xybin, fracs, 0)
             F = fracs**rflag[:,None] * (1.-fracs)**(1.-rflag[:,None])
         else:
             F = 1
@@ -97,11 +100,11 @@ class TwodHierarchical():
 
     def gpmodel(self, rflag=None, normprec=1e4, alpha_zero=-10, float_mean=False, nodata=False,
         gpkernel='rbf', xmin=-4, xmax=1, ymin=-1, ymax=3, amin=-3, amax=3, smin=-5, smax=0, nojitter=True):
-        from tinygp import kernels, GaussianProcess#, transforms
+        from tinygp import kernels, GaussianProcess
 
         # hyperprior
         alphas = numpyro.sample("alphas", dist.Uniform(low=alpha_zero*jnp.ones(self.Nbin), high=self.alpha_max*jnp.ones(self.Nbin)))
-        alphas = jnp.where(self.idx_valid_mass_age, alphas, alpha_zero)
+        alphas = jnp.where(self.idx_valid_xybin, alphas, alpha_zero)
         priors = jnp.exp(alphas)
         numpyro.deterministic("priors", priors)
 
@@ -135,14 +138,14 @@ class TwodHierarchical():
             kernel = kernels.RationalQuadratic(alpha=al, scale=jnp.array([lenx, leny]))
 
         kernel = jnp.exp(2*lna) * kernel
-        X = jnp.array([self.Xbins_center[self.idx_valid_mass_age], self.Ybins_center[self.idx_valid_mass_age]]).T
+        X = jnp.array([self.Xbins_center[self.idx_valid_xybin], self.Ybins_center[self.idx_valid_xybin]]).T
         gp = GaussianProcess(kernel, X, diag=jnp.exp(2*lnsigma), mean=mu)
-        loglike_gp = gp.condition(alphas[self.idx_valid_mass_age])
+        loglike_gp = gp.condition(alphas[self.idx_valid_xybin])
 
         # add rotation data
         if rflag is not None:
             fracs = numpyro.sample("fracs", dist.Uniform(low=jnp.zeros(self.Nbin), high=jnp.ones(self.Nbin)))
-            fracs = jnp.where(self.idx_valid_mass_age, fracs, 0)
+            fracs = jnp.where(self.idx_valid_xybin, fracs, 0)
             F = fracs**rflag[:,None] * (1.-fracs)**(1.-rflag[:,None])
         else:
             F = 1
@@ -153,56 +156,6 @@ class TwodHierarchical():
             log_marg_like = jnp.sum(jnp.log(jnp.dot(F*self.L, priors*self.ds)))
 
         numpyro.factor("loglike", log_marg_like + loglike_gp)
-
-    """
-    def gpmodel(self, rflag=None, eps=2, normprec=1e4, alpha_zero=-10,  xmin=-4, xmax=1, ymin=-1, ymax=3, amin=-3, amax=3, smin=-5, smax=3, float_mean=False, nojitter=False, gpkernel='rbf', nodata=False):
-        print ("mygp")
-        # GP
-        lnlenx = numpyro.sample("lnlenx", dist.Uniform(low=xmin, high=xmax))
-        lnleny = numpyro.sample("lnleny", dist.Uniform(low=ymin, high=ymax))
-        lna = numpyro.sample("lna", dist.Uniform(low=amin, high=amax))
-        lenx, leny = jnp.exp(lnlenx), jnp.exp(lnleny)
-
-        dx2 = jnp.power((self.Xbins_center[:, None] - self.Xbins_center[None, :]) / lenx, 2.0)
-        dy2 = jnp.power((self.Ybins_center[:, None] - self.Ybins_center[None, :]) / leny, 2.0)
-        kernel = jnp.exp(2*lna) * jnp.exp(-0.5*dx2-0.5*dy2)
-
-        if nojitter:
-            lnsigma = -5
-        else:
-            lnsigma = numpyro.sample("lnsigma", dist.Uniform(low=smin, high=smax))
-        kernel += jnp.exp(2*lnsigma) * jnp.eye(self.Nbin)
-
-        if float_mean:
-            alpha_mu = numpyro.sample("alpha_mu", dist.Uniform(low=alpha_zero, high=self.alpha_max))
-            mu = alpha_mu * jnp.ones(self.Nbin)
-        else:
-            mu = self.alpha_mean * jnp.ones(self.Nbin)
-
-        mv = dist.MultivariateNormal(loc=mu, covariance_matrix=kernel)
-        alphas = numpyro.sample("alphas", mv)
-        alphas = jnp.where(self.idx_valid_mass_age, alphas, alpha_zero)
-        alphas = jnp.where(alphas > alpha_zero, alphas, alpha_zero)
-        priors = jnp.exp(alphas)
-        numpyro.deterministic("priors", priors)
-
-        # normalization
-        prob_sum = jnp.sum(priors*self.ds)
-        norm_factor = -normprec * (1. - prob_sum)**2
-        numpyro.deterministic("prob_sum", prob_sum)
-        numpyro.factor("norm_factor", norm_factor)
-
-        # add rotation data
-        if rflag is not None:
-            fracs = numpyro.sample("fracs", dist.Uniform(low=jnp.zeros(self.Nbin), high=jnp.ones(self.Nbin)))
-            fracs = jnp.where(self.idx_valid_mass_age, fracs, 0)
-            F = fracs**rflag[:,None] * (1.-fracs)**(1.-rflag[:,None])
-        else:
-            F = 1
-
-        log_marg_like = jnp.sum(jnp.log(jnp.dot(F*self.L, priors*self.ds)))
-        numpyro.factor("loglike", log_marg_like)
-    """
 
     def setup_hmc(self, target_accept_prob=0.95, num_warmup=1000, num_samples=1000, model='step'):
         self.n_sample = num_samples
@@ -287,7 +240,7 @@ class TwodHierarchical():
             return None
 
         rotfracs = np.array(samples['fracs'])
-        rotfracs[:,~self.idx_valid_mass_age] = np.nan
+        rotfracs[:,~self.idx_valid_xybin] = np.nan
         rmean, rstd = jnp.mean(rotfracs, axis=0), jnp.std(rotfracs, axis=0)
         rmean = np.array(rmean.reshape((Nybin, Nxbin)))
         rstd = np.array(rstd.reshape((Nybin, Nxbin)))
