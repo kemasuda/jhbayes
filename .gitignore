@@ -1,4 +1,8 @@
 build/
 dist/
 *egg-info*
+*DS_STORE*
 src/jhbayes/*.png
+src/jhbayes/*.csv
+src/jhbayes/*.npz
+src/jhbayes/*.pkl
