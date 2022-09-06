@@ -17,10 +17,7 @@ class TwodHierarchical():
     def __init__(self, samples, xmin, xmax, dx, ymin, ymax, dy, bin_log, sample_log, xvals=None, yvals=None, vallabel=None, xtrue=None, ytrue=None, truelabel=None, valid_xybin_func=None):
         self.postsamples = samples
         if bin_log:
-            self.postsamples[:,:,1] = np.log10(self.postsamples[:,:,1] * 1e9)
-            #age_upper = lambda mass: np.log10((-30 * (mass-1.25) + 5.) * 1e9)
-        #else:
-            #age_upper = lambda mass: -30 * (mass-1.25) + 5.
+            self.postsamples[:,:,1] = np.log10(self.postsamples[:,:,1] * 1e9) # still assumes age in Gyr
 
         self.xmin, self.xmax, self.dx, self.ymin, self.ymax, self.dy, self.bin_log, self.sample_log, self.xvals, self.yvals, self.vallabel, self.xtrue, self.ytrue, self.truelabel = xmin, xmax, dx, ymin, ymax, dy, bin_log, sample_log, xvals, yvals, vallabel, xtrue, ytrue, truelabel
 
